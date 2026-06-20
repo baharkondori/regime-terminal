@@ -28,7 +28,7 @@ from config import Config, DISCLAIMER
 from dataloader import load_ohlcv
 from features import compute_features, scale_features
 from hmmmodel import fit_regime_model
-from regimelabeler import label_regimes, apply_labels, is_bullish
+from regimelabeler import label_regimes, apply_labels, is_bullish, compute_transition_table, most_likely_next_regimes
 from strategies import compute_indicators, evaluate_confirmations, confirmations_count_series
 from backtester import run_backtest
 from utils import regime_price_chart, equity_curve_chart, drawdown_chart, posterior_heatmap, set_seed
@@ -155,6 +155,7 @@ def run_pipeline(cfg: Config):
     conf_breakdown = evaluate_confirmations(indicators_aligned.iloc[-1], "bull", cfg) if len(indicators_aligned) else {}
 
     result = run_backtest(aligned_df, regime_names_aligned, conf_counts, cfg)
+    transition_table = compute_transition_table(regime_names_aligned)
 
     return {
         "df": aligned_df,
@@ -167,6 +168,7 @@ def run_pipeline(cfg: Config):
         "result": result,
         "model": model,
         "indicators": indicators_aligned,
+        "transition_table": transition_table,
     }
 
 
@@ -203,8 +205,54 @@ c2.metric("Regime confidence", f"{last_confidence:.1%}")
 c3.metric("Confirmations", f"{last_conf_count} / {cfg.n_confirmations_total}")
 c4.metric("Suggested action", action)
 
+# --- Plain-English explanation (for beginners) ---
+from explain import explain_signal, explain_confirmation_breakdown, GLOSSARY, DISCLAIMER_SHORT
+
+st.info(
+    explain_signal(
+        regime=last_regime,
+        confidence=last_confidence,
+        conf_count=last_conf_count,
+        conf_required=cfg.confirmations_required,
+        conf_total=cfg.n_confirmations_total,
+        bullish_now=bullish_now,
+        action=action,
+    )
+)
+st.caption(DISCLAIMER_SHORT)
+
 with st.expander("Why this signal? (confirmation breakdown)"):
+    for line in explain_confirmation_breakdown(pipeline["conf_breakdown"]):
+        st.markdown(f"- {line}")
+    st.markdown("**Raw values:**")
     st.write(pipeline["conf_breakdown"])
+
+with st.expander("📖 What do these terms mean?"):
+    for term, definition in GLOSSARY.items():
+        st.markdown(f"**{term.capitalize()}** — {definition}")
+
+# --- Historical transition pattern (what tended to happen next, historically) ---
+st.markdown("### 🔄 What tended to happen next, historically")
+from explain import explain_transition
+
+transition_table = pipeline["transition_table"]
+if not transition_table.empty and last_regime in transition_table.index:
+    n_obs = int(transition_table.loc[last_regime, "n_observations"])
+    top_next = most_likely_next_regimes(transition_table, last_regime, top_n=3)
+    st.warning(explain_transition(last_regime, top_next, n_obs))
+
+    with st.expander("Full historical transition table (every regime → every regime)"):
+        st.caption(
+            "Each row is a starting regime; each column is what the *next* bar turned out "
+            "to be, as a historical percentage. 'n_observations' is how many times that "
+            "starting regime occurred — rows with very few observations are less reliable."
+        )
+        display_table = transition_table.copy()
+        pct_cols = [c for c in display_table.columns if c != "n_observations"]
+        display_table[pct_cols] = (display_table[pct_cols] * 100).round(1)
+        st.dataframe(display_table, use_container_width=True)
+else:
+    st.caption("Not enough historical data yet to show transition patterns for this regime.")
 
 st.markdown("---")
 

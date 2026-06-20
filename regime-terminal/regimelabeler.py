@@ -115,6 +115,64 @@ def is_bearish_or_crash(regime_name: str) -> bool:
     return regime_name in BEARISH_LABELS
 
 
+def compute_transition_table(regime_names: np.ndarray) -> pd.DataFrame:
+    """Compute the empirical (observed) regime-to-regime transition table:
+    for every bar, what regime did it transition into on the *next* bar.
+
+    This is intentionally computed from the already-labeled regime name
+    sequence (not the HMM's internal transmat_), for two reasons:
+      1. It works identically regardless of HMM backend (hmmlearn has a
+         transmat_, the sklearn GMM fallback does not).
+      2. It directly answers "historically, after regime X, what regime
+         came next" in the same vocabulary the user already sees (bull,
+         chop, crash, etc.) rather than requiring a second translation
+         through the state_id -> name mapping.
+
+    This describes *what has already happened* in the historical data.
+    It is not a forecast — the next occurrence of the same regime could
+    transition completely differently. See explain.py's framing language
+    for how this is presented to the user.
+
+    Returns
+    -------
+    DataFrame indexed by "from" regime name, columns are "to" regime names,
+    values are probabilities (each row sums to 1.0). Also includes a
+    'n_observations' column giving how many times that "from" regime was
+    observed (so the user can judge how much history backs each row).
+    """
+    if len(regime_names) < 2:
+        return pd.DataFrame()
+
+    current = pd.Series(regime_names[:-1])
+    nxt = pd.Series(regime_names[1:])
+
+    counts = pd.crosstab(current, nxt)
+    n_obs = counts.sum(axis=1)
+    probs = counts.div(n_obs, axis=0)
+
+    # Ensure every regime that appears anywhere shows up as both a row and
+    # column, even if it was never observed as a "from" state (e.g. a
+    # regime that only ever appears at the very end of the series).
+    all_regimes = sorted(set(regime_names))
+    probs = probs.reindex(index=all_regimes, columns=all_regimes, fill_value=0.0)
+    n_obs = n_obs.reindex(all_regimes, fill_value=0)
+
+    probs["n_observations"] = n_obs.astype(int)
+    return probs
+
+
+def most_likely_next_regimes(transition_table: pd.DataFrame, current_regime: str, top_n: int = 3):
+    """Given the transition table and the current regime, return the top_n
+    most likely next regimes as a list of (regime_name, probability) tuples,
+    sorted descending by probability. Returns [] if the current regime has
+    no observed history (e.g. it's brand new in this fit)."""
+    if current_regime not in transition_table.index:
+        return []
+    row = transition_table.loc[current_regime].drop("n_observations", errors="ignore")
+    row = row.sort_values(ascending=False)
+    return list(row.head(top_n).items())
+
+
 if __name__ == "__main__":
     import pandas as pd
     from features import compute_features, scale_features
