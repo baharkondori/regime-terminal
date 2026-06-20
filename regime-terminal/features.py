@@ -46,7 +46,7 @@ def compute_features(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     out["returns"] = np.log(df["Close"] / df["Close"].shift(1))
     out["range"] = (df["High"] - df["Low"]) / df["Close"]
     out["volume_change"] = df["Volume"].pct_change()
-    out["rolling_vol"] = out["returns"].rolling(cfg.rolling_vol_window).std()
+    out["rolling_vol"] = out["returns"].rolling(cfg.effective_rolling_vol_window).std()
 
     # volume_change can be +inf when Volume goes from 0 -> positive; clean that up
     out = out.replace([np.inf, -np.inf], np.nan)

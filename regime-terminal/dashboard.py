@@ -39,6 +39,124 @@ st.set_page_config(page_title="Regime Terminal", layout="wide", page_icon="📈"
 SIGNAL_LOG_PATH = "signal_log.csv"
 DEFAULT_GRADING_HORIZON_BARS = 24  # how many bars ahead to check "did the historical pattern's top guess come true"
 
+# ---------------------------------------------------------------------------
+# Visual theme: trading-terminal aesthetic (dark, monospace data, sharp
+# edges, signal-color coding). Tokens match utils.py's DESIGN_TOKENS so the
+# Plotly charts and the surrounding Streamlit shell read as one system.
+# ---------------------------------------------------------------------------
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+    --rt-bg: #0B0E14;
+    --rt-panel: #11151F;
+    --rt-border: #232938;
+    --rt-text: #E8EAED;
+    --rt-text-dim: #8B95A8;
+    --rt-green: #3DDC84;
+    --rt-red: #FF5C5C;
+    --rt-amber: #FFB454;
+    --rt-blue: #5B9DFF;
+    --rt-mono: 'JetBrains Mono', 'IBM Plex Mono', SFMono-Regular, Consolas, monospace;
+    --rt-body: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+}
+
+/* App shell */
+.stApp {
+    background-color: var(--rt-bg);
+    font-family: var(--rt-body);
+}
+[data-testid="stSidebar"] {
+    background-color: var(--rt-panel);
+    border-right: 1px solid var(--rt-border);
+}
+[data-testid="stSidebar"] * {
+    font-family: var(--rt-body);
+}
+
+/* Headings */
+h1, h2, h3 {
+    font-family: var(--rt-body) !important;
+    font-weight: 600 !important;
+    color: var(--rt-text) !important;
+    letter-spacing: -0.01em;
+}
+h1 { border-bottom: 1px solid var(--rt-border); padding-bottom: 0.5rem; }
+
+/* Metric cards: sharp edges, hairline border, monospace value */
+[data-testid="stMetric"] {
+    background-color: var(--rt-panel);
+    border: 1px solid var(--rt-border);
+    border-radius: 3px;
+    padding: 0.85rem 1rem;
+}
+[data-testid="stMetricLabel"] {
+    font-family: var(--rt-body) !important;
+    font-size: 0.72rem !important;
+    font-weight: 500 !important;
+    color: var(--rt-text-dim) !important;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+[data-testid="stMetricValue"] {
+    font-family: var(--rt-mono) !important;
+    font-weight: 600 !important;
+    color: var(--rt-text) !important;
+}
+
+/* Body text */
+p, span, label, .stMarkdown, .stCaption {
+    font-family: var(--rt-body);
+    color: var(--rt-text);
+}
+.stCaption, [data-testid="stCaptionContainer"] {
+    color: var(--rt-text-dim) !important;
+}
+
+/* Numeric / monospace content: dataframes, code blocks */
+[data-testid="stDataFrame"], .stDataFrame, code {
+    font-family: var(--rt-mono) !important;
+}
+
+/* Buttons: sharp edges, signal-green accent on primary */
+.stButton > button, .stDownloadButton > button {
+    border-radius: 3px;
+    border: 1px solid var(--rt-border);
+    font-family: var(--rt-body);
+    font-weight: 500;
+}
+.stButton > button[kind="primary"] {
+    background-color: var(--rt-green);
+    border-color: var(--rt-green);
+    color: #06120A;
+}
+
+/* Inputs: match panel surface */
+.stTextInput input, .stSelectbox [data-baseweb="select"], .stSlider {
+    font-family: var(--rt-mono);
+}
+
+/* Expander headers */
+[data-testid="stExpander"] {
+    border: 1px solid var(--rt-border);
+    border-radius: 3px;
+}
+
+/* Dividers */
+hr {
+    border-color: var(--rt-border);
+}
+
+/* Info/warning boxes: align with panel surface instead of Streamlit's defaults */
+[data-testid="stAlert"] {
+    border-radius: 3px;
+    font-family: var(--rt-body);
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Sidebar controls
@@ -47,7 +165,33 @@ DEFAULT_GRADING_HORIZON_BARS = 24  # how many bars ahead to check "did the histo
 st.sidebar.title("Regime Terminal")
 st.sidebar.caption("HMM-driven regime detection & backtesting")
 
-asset = st.sidebar.text_input("Asset", value="BTC-USD")
+# --- Asset class picker: two sections, Crypto and Stock ---
+COMMON_CRYPTO_TICKERS = ["BTC-USD", "ETH-USD", "SOL-USD", "DOGE-USD", "XRP-USD"]
+COMMON_STOCK_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "SPY"]
+
+asset_class = st.sidebar.radio("Market", ["Crypto", "Stock"], horizontal=True)
+
+if asset_class == "Crypto":
+    ticker_choice = st.sidebar.selectbox("Crypto asset", COMMON_CRYPTO_TICKERS + ["Custom..."])
+    default_asset = ticker_choice if ticker_choice != "Custom..." else "BTC-USD"
+    cfg_asset_class = "crypto"
+else:
+    ticker_choice = st.sidebar.selectbox("Stock ticker", COMMON_STOCK_TICKERS + ["Custom..."])
+    default_asset = ticker_choice if ticker_choice != "Custom..." else "AAPL"
+    cfg_asset_class = "stock"
+
+if ticker_choice == "Custom...":
+    asset = st.sidebar.text_input("Enter ticker", value=default_asset)
+else:
+    asset = ticker_choice
+
+if cfg_asset_class == "stock":
+    st.sidebar.caption(
+        "Stocks trade ~6.5h/day, 5 days/week (unlike crypto's 24/7). "
+        "Rolling windows and Sharpe/Sortino are automatically scaled for this "
+        "(see Config.bars_per_day) rather than using crypto's 24-bars-per-day assumption."
+    )
+
 lookback_days = st.sidebar.slider("Lookback (days)", 90, 729, 730 if False else 729, step=10)
 n_components = st.sidebar.slider("HMM states (n_components)", 3, 10, 7)
 hmm_backend = st.sidebar.selectbox("HMM backend", ["hmmlearn", "gmm"], index=0)
@@ -76,6 +220,7 @@ st.sidebar.caption(DISCLAIMER)
 
 cfg = Config(
     asset=asset,
+    asset_class=cfg_asset_class,
     lookback_days=lookback_days,
     n_components=n_components,
     hmm_backend=hmm_backend,
@@ -87,6 +232,31 @@ cfg = Config(
 )
 if aggressive_mode:
     cfg = cfg.apply_aggressive()
+
+
+# ---------------------------------------------------------------------------
+# Terminal-style header bar
+# ---------------------------------------------------------------------------
+
+import datetime as _dt
+_now_utc = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+_class_label = "CRYPTO · 24/7" if cfg.asset_class == "crypto" else "EQUITY · MKT HRS"
+
+st.markdown(f"""
+<div style="
+    display:flex; justify-content:space-between; align-items:baseline;
+    border-bottom:1px solid #232938; padding-bottom:10px; margin-bottom:18px;
+">
+  <div style="font-family:'Inter',sans-serif; font-weight:700; font-size:1.3rem; color:#E8EAED; letter-spacing:-0.01em;">
+    REGIME TERMINAL
+  </div>
+  <div style="font-family:'JetBrains Mono',monospace; font-size:0.78rem; color:#8B95A8; display:flex; gap:18px;">
+    <span style="color:#5B9DFF; font-weight:600;">{cfg.asset}</span>
+    <span>{_class_label}</span>
+    <span>{_now_utc}</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -260,8 +430,26 @@ setup_strength = compute_setup_strength(
     historical_continuation_prob=_historical_continuation,
 )
 
-tier_colors = {"A": "🟢", "B": "🟡", "C": "🟠", "D": "🔴"}
-st.markdown(f"### {tier_colors.get(setup_strength['tier'], '')} Setup Strength: Tier {setup_strength['tier']} ({setup_strength['score']}/100)")
+_tier_colors = {"A": "#3DDC84", "B": "#FFB454", "C": "#FF8A5C", "D": "#FF5C5C"}
+_tier_color = _tier_colors.get(setup_strength["tier"], "#8B95A8")
+st.markdown(f"""
+<div style="
+    display:inline-flex; align-items:center; gap:10px;
+    border:1px solid {_tier_color}; border-left:4px solid {_tier_color};
+    border-radius:3px; padding:8px 16px; margin:6px 0 4px 0;
+    background-color:#11151F;
+">
+  <span style="font-family:'JetBrains Mono',monospace; font-weight:700; font-size:1.05rem; color:{_tier_color};">
+    TIER {setup_strength['tier']}
+  </span>
+  <span style="font-family:'JetBrains Mono',monospace; font-size:0.85rem; color:#8B95A8;">
+    {setup_strength['score']}/100
+  </span>
+  <span style="font-family:'Inter',sans-serif; font-size:0.78rem; color:#8B95A8;">
+    SETUP STRENGTH
+  </span>
+</div>
+""", unsafe_allow_html=True)
 st.caption(explain_setup_strength(setup_strength, last_regime))
 
 # --- Plain-English explanation (for beginners) ---

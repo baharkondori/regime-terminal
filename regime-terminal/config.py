@@ -19,6 +19,7 @@ from dataclasses import dataclass
 class Config:
     # ---- Data ----
     asset: str = "BTC-USD"
+    asset_class: str = "crypto"   # "crypto" (24/7 trading) or "stock" (~6.5h/day, 5 days/week)
     interval: str = "1h"
     lookback_days: int = 730
     cache_dir: str = ".cache"
@@ -31,7 +32,7 @@ class Config:
     hmm_tol: float = 0.05
     hmm_verbose: bool = False
     random_state: int = 42
-    rolling_vol_window: int = 24  # hours, for extra robustness feature
+    rolling_vol_window: int = 0  # 0 = auto-derive from asset_class (see bars_per_day); set explicitly to override
 
     # ---- Strategy / confirmations ----
     confirmations_required: int = 7
@@ -65,6 +66,34 @@ class Config:
 
     # ---- Backtest ----
     initial_equity: float = 10_000.0
+
+    @property
+    def bars_per_day(self) -> int:
+        """How many hourly bars make up one trading day, given asset_class.
+        Crypto trades 24/7; US stocks trade ~6.5h/day (9:30am-4:00pm ET),
+        which rounds to 7 hourly bars. This is intentionally an approximation
+        (it doesn't model half-days, holidays, or non-US exchanges) -- good
+        enough for sizing rolling windows sensibly, not a market-calendar
+        replacement."""
+        if self.asset_class == "stock":
+            return 7
+        return 24  # crypto (and the default/fallback for any other class)
+
+    @property
+    def bars_per_year(self) -> int:
+        """How many hourly bars make up one trading year, given asset_class.
+        Crypto: 24 * 365. Stocks: ~7 bars/day * ~252 trading days/year (the
+        standard US market convention, excluding weekends and holidays)."""
+        if self.asset_class == "stock":
+            return self.bars_per_day * 252
+        return self.bars_per_day * 365
+
+    @property
+    def effective_rolling_vol_window(self) -> int:
+        """The actual window used by features.py: rolling_vol_window if
+        explicitly set (non-zero), otherwise one trading day's worth of
+        bars for this asset_class."""
+        return self.rolling_vol_window if self.rolling_vol_window > 0 else self.bars_per_day
 
     def apply_aggressive(self) -> "Config":
         """Return a new Config with aggressive-mode overrides applied."""

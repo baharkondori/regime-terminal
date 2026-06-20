@@ -103,16 +103,22 @@ def compute_indicators(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     out["macd_line"] = macd_line
     out["macd_signal"] = signal_line
 
+    # These windows are expressed in "1 trading day" / "~1 trading week" of
+    # bars rather than a hardcoded bar count, since 24 bars means something
+    # very different for a 24/7 crypto asset vs. a ~6.5h/day stock. See
+    # Config.bars_per_day.
+    one_day = cfg.bars_per_day
     returns = np.log(close / close.shift(1))
-    out["realized_vol"] = returns.rolling(24).std()
+    out["realized_vol"] = returns.rolling(one_day).std()
     out["realized_vol_pct"] = out["realized_vol"].rank(pct=True)  # percentile vs own history
 
-    vol_mean = volume.rolling(24).mean()
-    vol_std = volume.rolling(24).std()
+    vol_mean = volume.rolling(one_day).mean()
+    vol_std = volume.rolling(one_day).std()
     out["volume_z"] = (volume - vol_mean) / vol_std.replace(0, np.nan)
 
-    rolling_high = high.rolling(20).max()
-    rolling_low = low.rolling(20).min()
+    breakout_window = max(2, round(one_day * 5 / 6))  # ~5/6 of a trading week's bars, matching the original 20/24 ratio
+    rolling_high = high.rolling(breakout_window).max()
+    rolling_low = low.rolling(breakout_window).min()
     out["breakout_up"] = close > rolling_high.shift(1)
     out["breakout_down"] = close < rolling_low.shift(1)
 

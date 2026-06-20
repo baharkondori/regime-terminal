@@ -104,6 +104,7 @@ cfg = Config(asset="ETH-USD", leverage=3.0, confirmations_required=6)
 | Parameter | Default | Description |
 |---|---|---|
 | `asset` | `BTC-USD` | Ticker passed to yfinance |
+| `asset_class` | `crypto` | `crypto` (24/7 trading) or `stock` (~6.5h/day, 5 days/week) — see below |
 | `interval` | `1h` | Candle interval |
 | `lookback_days` | `730` | History window (yfinance caps hourly data at ~730 days) |
 | `n_components` | `7` | Number of HMM hidden states |
@@ -116,6 +117,30 @@ cfg = Config(asset="ETH-USD", leverage=3.0, confirmations_required=6)
 | `trade_cost` | `0.0005` | Commission + slippage, charged per side (round-trip = 2x) |
 | `stop_loss_pct` | `0.08` | Hard stop-loss, 8% adverse move from entry |
 | `trailing_stop_pct` | `0.04` | Trailing stop distance from peak (if enabled) |
+
+### Crypto vs. stock: why `asset_class` matters
+
+The dashboard sidebar has separate **Crypto** and **Stock** sections. This
+isn't just a UI convenience — several calculations are expressed in "bars"
+rather than wall-clock time, and a bar means something different depending
+on the asset:
+
+- **Crypto** trades 24/7 → 24 hourly bars = 1 trading day.
+- **Stocks** trade ~6.5h/day, 5 days/week (US market hours) → ~7 hourly
+  bars = 1 trading day, and ~252 trading days/year (not 365).
+
+`Config.bars_per_day` and `Config.bars_per_year` derive the right
+constants from `asset_class`, and these flow into:
+- `features.py`'s rolling volatility window
+- `strategies.py`'s realized-vol, volume-spike, and breakout windows
+- `backtester.py`'s Sharpe/Sortino annualization
+
+Getting this wrong doesn't crash anything — it silently produces a
+miscalibrated signal (e.g. inflated Sharpe ratios for stocks if crypto's
+24×365 annualization were used for a market that only trades ~1,764
+hours/year). Always set `asset_class="stock"` when using a non-crypto
+ticker; the CLI (`--asset-class stock`) and dashboard sidebar both expose
+this explicitly so it's never silently defaulted incorrectly.
 
 ### Aggressive mode
 
@@ -287,6 +312,92 @@ print(result.aggregated_metrics)      # compounded out-of-sample summary
 
 ---
 
+## Comparing against standard strategies
+
+```bash
+python cli.py --compare-strategies --asset BTC-USD
+```
+
+Runs this project's HMM strategy alongside four standard, widely-known
+strategies on the same data: **buy-and-hold**, a **50/200 moving-average
+crossover** ("golden cross"), **RSI mean-reversion**, and a **MACD
+crossover**. Implemented in `benchmark_strategies.py`.
+
+This exists as an honest reality check, not a victory-lap feature. These
+standard strategies are "standard" because they're simple and widely
+taught — not because they have a proven edge. If the HMM strategy can't
+beat a plain moving-average crossover, that's real information worth
+knowing, not a sign something is broken. In testing during development,
+the simpler standard strategies sometimes outperformed the custom HMM
+strategy on total return, while the HMM strategy showed a meaningfully
+smaller max drawdown — a real risk/return tradeoff, not a clear win either
+way.
+
+This command is in-sample, same caveat as `--run-backtest`. For an honest
+comparison, walk-forward validate each strategy you're considering before
+trusting any single number — `benchmark_strategies.py`'s
+`run_simple_backtest()` accepts the same `Config` and can be adapted into
+a walk-forward loop the same way `walkforward.py` does for the HMM
+strategy.
+
+```python
+from benchmark_strategies import compare_strategies
+from config import Config
+from dataloader import load_ohlcv
+
+cfg = Config(asset="BTC-USD")
+df = load_ohlcv(cfg)
+comparison = compare_strategies(df, cfg)
+print(comparison)
+```
+
+---
+
+## Strategy selector (meta-strategy)
+
+```bash
+python cli.py --strategy-selector --asset BTC-USD --n-folds 5 --train-frac 0.7
+```
+
+A meta-strategy implemented in `strategy_selector.py`: instead of
+committing to one fixed strategy, it learns — separately for each
+walk-forward fold, from train data only — which of 5 candidate strategies
+(this project's HMM strategy, buy-and-hold, MA crossover, RSI, MACD)
+historically performed best *within each regime*, then applies that
+regime-conditional choice to the following unseen test window.
+
+This is meaningfully different from a self-correcting or reinforcement
+learning approach, deliberately: the "learning" here is a simple,
+auditable lookup table (regime → best historical strategy), rebuilt fresh
+each fold from train data only. It never updates based on its own live
+predictions, and you can print the table at any point to see exactly why
+a choice was made — there's no opaque weight-adjustment process that
+could silently drift.
+
+```python
+from strategy_selector import build_regime_strategy_table, run_selector_walkforward
+from config import Config
+from dataloader import load_ohlcv
+
+cfg = Config(asset="BTC-USD")
+df = load_ohlcv(cfg)
+
+# Walk-forward validated result (the trustworthy version):
+result = run_selector_walkforward(df, cfg, n_folds=5, train_frac=0.7)
+print(result.aggregated_metrics)
+```
+
+**Real overfitting risk, just a different shape of it.** With ~7 regimes
+and 5 candidate strategies, a regime that occurred only a handful of times
+in a given training window can produce a "best strategy" that's really
+just small-sample noise, not a robust pattern. `min_observations_per_regime`
+(default 30) guards against this — regimes below that threshold fall back
+to buy-and-hold rather than trusting a noisy "winner." Lower this
+cautiously, and always check `run_selector_walkforward`'s out-of-sample
+results, not just the regime → strategy table's in-sample numbers.
+
+---
+
 ## Project structure
 
 ```
@@ -294,26 +405,33 @@ regime-terminal/
 ├── config.py              # Central Config dataclass + disclaimer text
 ├── dataloader.py           # yfinance fetch + disk caching
 ├── features.py              # Feature engineering (returns, range, vol change)
-├── hmmmodel.py               # RegimeHMM: hmmlearn / sklearn GMM fallback
-├── nn_regime_model.py         # RegimeNN: PyTorch autoencoder + GMM alternative (optional)
-├── regimelabeler.py            # Auto-label HMM states + transition table + setup strength
-├── strategies.py                 # 8 confirmation indicators (vectorized)
-├── backtester.py                  # Sequential bar-by-bar simulation engine
-├── walkforward.py                   # Honest out-of-sample validation (train/test folds)
-├── explain.py                         # Plain-English explanations for beginners
-├── prediction_log.py                    # Signal snapshot logging + hindsight grading
-├── utils.py                               # Metrics + Plotly chart helpers
-├── dashboard.py                             # Streamlit app
-├── cli.py                                    # Command-line interface
-├── build_notebook.py                           # Script that generates the Colab notebook
+├── sentiment.py              # LunarCrush social sentiment (optional, experimental feature)
+├── hmmmodel.py                # RegimeHMM: hmmlearn / sklearn GMM fallback
+├── nn_regime_model.py           # RegimeNN: PyTorch autoencoder + GMM alternative (optional)
+├── regimelabeler.py               # Auto-label HMM states + transition table + setup strength
+├── strategies.py                    # 8 confirmation indicators (vectorized)
+├── benchmark_strategies.py            # Standard strategies for honest comparison
+├── strategy_selector.py                  # Regime-conditional meta-strategy (walk-forward validated)
+├── backtester.py                        # Sequential bar-by-bar simulation engine
+├── walkforward.py                         # Honest out-of-sample validation (train/test folds)
+├── explain.py                                # Plain-English explanations for beginners
+├── prediction_log.py                            # Signal snapshot logging + hindsight grading
+├── utils.py                                        # Metrics + Plotly chart helpers
+├── dashboard.py                                       # Streamlit app
+├── cli.py                                                # Command-line interface
+├── build_notebook.py                                        # Script that generates the Colab notebook
 ├── notebooks/
-│   └── regime_terminal_colab.ipynb               # Annotated Colab demo
+│   └── regime_terminal_colab.ipynb                              # Annotated Colab demo
 ├── tests/
-│   ├── conftest.py                                 # Shared fixtures (synthetic OHLCV)
+│   ├── conftest.py                                                 # Shared fixtures (synthetic OHLCV)
+│   ├── test_config.py
 │   ├── test_features.py
+│   ├── test_sentiment.py
 │   ├── test_hmmmodel.py
 │   ├── test_regimelabeler.py
 │   ├── test_strategies.py
+│   ├── test_benchmark_strategies.py
+│   ├── test_strategy_selector.py
 │   ├── test_backtester.py
 │   ├── test_walkforward.py
 │   ├── test_explain.py

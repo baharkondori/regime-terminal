@@ -27,12 +27,15 @@ from regimelabeler import label_regimes, apply_labels, is_bullish
 from strategies import compute_indicators, confirmations_count_series
 from backtester import run_backtest
 from walkforward import run_walkforward
+from benchmark_strategies import compare_strategies
+from strategy_selector import run_selector_walkforward
 from utils import set_seed
 
 
 def build_config_from_args(args) -> Config:
     cfg = Config(
         asset=args.asset,
+        asset_class=args.asset_class,
         lookback_days=args.lookback_days,
         n_components=args.n_components,
         hmm_backend=args.hmm_backend,
@@ -162,14 +165,98 @@ def cmd_walkforward(cfg: Config, force_refresh: bool, n_folds: int, train_frac: 
     return result
 
 
+def cmd_compare_strategies(cfg: Config, force_refresh: bool):
+    """Run this project's HMM strategy alongside standard, widely-known
+    strategies (buy-and-hold, MA crossover, RSI mean-reversion, MACD
+    crossover) on the same data, for an honest side-by-side comparison.
+
+    This is an in-sample comparison (same caveats as --run-backtest); for
+    an out-of-sample version, run --walk-forward and compare its
+    aggregated_metrics against a similarly walk-forward-validated run of
+    each standard strategy (not yet automated here -- see README).
+    """
+    pipeline = run_pipeline(cfg, force_refresh)
+    hmm_result = run_backtest(pipeline["df"], pipeline["regime_names"], pipeline["conf_counts"], cfg)
+
+    standard_comparison = compare_strategies(pipeline["df"], cfg)
+
+    hmm_row = pd.DataFrame([{
+        "total_return_pct": hmm_result.metrics["total_return_pct"],
+        "benchmark_return_pct": hmm_result.metrics["benchmark_return_pct"],
+        "alpha_pct": hmm_result.metrics["alpha_pct"],
+        "sharpe": hmm_result.metrics["sharpe"],
+        "sortino": hmm_result.metrics["sortino"],
+        "max_drawdown_pct": hmm_result.metrics["max_drawdown_pct"],
+        "n_trades": hmm_result.metrics["n_trades"],
+        "win_rate_pct": hmm_result.metrics["win_rate_pct"],
+    }], index=["hmm_regime_strategy (this project)"])
+
+    full_comparison = pd.concat([hmm_row, standard_comparison])
+    full_comparison = full_comparison.sort_values("total_return_pct", ascending=False)
+
+    print(f"\n{'=' * 90}")
+    print(f"STRATEGY COMPARISON — {cfg.asset} (in-sample)")
+    print(f"{'=' * 90}\n")
+    print(full_comparison.to_string())
+    print(
+        "\nThis is an IN-SAMPLE comparison — all strategies are evaluated on the\n"
+        "same data they could have been tuned against. A strategy ranking well\n"
+        "here is not strong evidence it will perform well going forward. Use\n"
+        "--walk-forward for this project's HMM strategy to get an honest\n"
+        "out-of-sample estimate, and apply the same discipline before trusting\n"
+        "any of the standard strategies' numbers above either.\n"
+    )
+    print(DISCLAIMER)
+    return full_comparison
+
+
+def cmd_strategy_selector(cfg: Config, force_refresh: bool, n_folds: int, train_frac: float):
+    """Walk-forward validate the regime-conditional strategy selector: for
+    each fold, learn (from train data only) which of 5 candidate
+    strategies historically performed best per regime, then apply that
+    choice blind to the following test window. See strategy_selector.py.
+    """
+    set_seed(cfg.random_state)
+    df = load_ohlcv(cfg, force_refresh=force_refresh)
+
+    result = run_selector_walkforward(df, cfg, n_folds=n_folds, train_frac=train_frac)
+
+    print(f"\n{'=' * 70}")
+    print(f"STRATEGY SELECTOR — WALK-FORWARD VALIDATION — {cfg.asset} — {len(result.windows)} folds")
+    print(f"{'=' * 70}\n")
+    print(
+        "Each fold learns, from train data only, which candidate strategy\n"
+        "(this project's HMM strategy, buy-and-hold, MA crossover, RSI, or\n"
+        "MACD) historically performed best in each regime -- then applies\n"
+        "that choice to the following unseen test window. This is a\n"
+        "meta-strategy, not a self-correcting model: the lookup table is\n"
+        "fixed once built per fold and never updated from its own live\n"
+        "predictions.\n"
+    )
+    print("Per-fold results:")
+    print(result.per_fold_metrics.to_string(index=False))
+
+    print(f"\n{'=' * 70}")
+    print("AGGREGATED OUT-OF-SAMPLE METRICS")
+    print(f"{'=' * 70}")
+    for k, v in result.aggregated_metrics.items():
+        print(f"  {k:30s}: {v:,.4f}" if isinstance(v, float) else f"  {k:30s}: {v}")
+
+    print(f"\n{DISCLAIMER}\n")
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description="Regime Terminal CLI")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--run-backtest", action="store_true")
     group.add_argument("--live-signal", action="store_true")
     group.add_argument("--walk-forward", action="store_true", help="Run honest out-of-sample validation instead of a single in-sample backtest")
+    group.add_argument("--compare-strategies", action="store_true", help="Compare this project's HMM strategy against standard strategies (buy-and-hold, MA crossover, RSI, MACD)")
+    group.add_argument("--strategy-selector", action="store_true", help="Walk-forward validate a regime-conditional strategy selector (learns best strategy per regime from train data only)")
 
     parser.add_argument("--asset", default="BTC-USD")
+    parser.add_argument("--asset-class", choices=["crypto", "stock"], default="crypto", help="Affects rolling window sizing and annualization (crypto=24/7, stock=~6.5h/day)")
     parser.add_argument("--lookback-days", type=int, default=730)
     parser.add_argument("--n-components", type=int, default=7)
     parser.add_argument("--hmm-backend", choices=["hmmlearn", "gmm"], default="hmmlearn")
@@ -193,6 +280,10 @@ def main():
         cmd_live_signal(cfg, args.force_refresh)
     elif args.walk_forward:
         cmd_walkforward(cfg, args.force_refresh, args.n_folds, args.train_frac)
+    elif args.compare_strategies:
+        cmd_compare_strategies(cfg, args.force_refresh)
+    elif args.strategy_selector:
+        cmd_strategy_selector(cfg, args.force_refresh, args.n_folds, args.train_frac)
 
 
 if __name__ == "__main__":
