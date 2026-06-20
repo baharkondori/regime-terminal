@@ -173,6 +173,109 @@ def most_likely_next_regimes(transition_table: pd.DataFrame, current_regime: str
     return list(row.head(top_n).items())
 
 
+# ---------------------------------------------------------------------------
+# Setup strength tier: a single transparent summary label combining signals
+# that already exist elsewhere in the pipeline (regime direction/confidence,
+# confirmations count, historical transition odds). No new prediction is
+# made here -- this only summarizes numbers that are already computed and
+# already shown individually elsewhere in the dashboard. The point breakdown
+# is always returned alongside the tier so nothing is a black box.
+# ---------------------------------------------------------------------------
+
+SETUP_STRENGTH_TIERS = ["D", "C", "B", "A"]  # D = weakest, A = strongest
+
+
+def compute_setup_strength(
+    regime_name: str,
+    regime_confidence: float,
+    conf_count: int,
+    conf_required: int,
+    conf_total: int,
+    historical_continuation_prob: float | None,
+) -> dict:
+    """Combine existing signals into one transparent strength tier.
+
+    Every point awarded is visible in the returned breakdown -- this is a
+    simple weighted sum of things the dashboard already computes elsewhere,
+    not a new model and not a forecast. It does not produce a profit target;
+    see explain.py for why that's intentionally excluded.
+
+    Parameters
+    ----------
+    regime_name : current regime label, e.g. "weak_bull"
+    regime_confidence : HMM posterior probability for the current regime, 0-1
+    conf_count : how many of the technical confirmations currently pass
+    conf_required : how many are required by the configured strategy
+    conf_total : total number of confirmation checks (8 by default)
+    historical_continuation_prob : the historical probability (0-1) that this
+        regime's most likely next state, per most_likely_next_regimes(),
+        continues in the same direction. Pass None if unavailable (e.g. not
+        enough history yet) -- those points are simply not awarded.
+
+    Returns
+    -------
+    dict with keys: tier (str), score (0-100), breakdown (dict of points
+    per factor), max_score (int).
+    """
+    points = {}
+    max_points = {}
+
+    # Factor 1: is the regime bullish at all? (0 or 25 points)
+    max_points["direction"] = 25
+    points["direction"] = 25 if is_bullish(regime_name) else 0
+
+    # Factor 2: regime confidence (0-25, scaled linearly)
+    max_points["regime_confidence"] = 25
+    points["regime_confidence"] = round(25 * max(0.0, min(1.0, regime_confidence)))
+
+    # Factor 3: confirmations met, relative to how many are required (0-30)
+    max_points["confirmations"] = 30
+    if conf_total > 0:
+        # Full points only once conf_required is met; partial credit below that,
+        # scaled against conf_required (not conf_total), since that's the
+        # threshold the strategy actually uses to decide whether to act.
+        if conf_required > 0:
+            ratio = min(1.0, conf_count / conf_required)
+        else:
+            ratio = 1.0 if conf_count > 0 else 0.0
+        points["confirmations"] = round(30 * ratio)
+    else:
+        points["confirmations"] = 0
+
+    # Factor 4: historical continuation odds, if we have them (0-20)
+    max_points["historical_pattern"] = 20
+    if historical_continuation_prob is not None:
+        points["historical_pattern"] = round(20 * max(0.0, min(1.0, historical_continuation_prob)))
+    else:
+        points["historical_pattern"] = 0
+        max_points["historical_pattern"] = 0  # don't penalize for missing data; shrink the denominator instead
+
+    total_max = sum(max_points.values())
+    total_score = sum(points.values())
+    pct = 100 * total_score / total_max if total_max > 0 else 0
+
+    if not is_bullish(regime_name):
+        # The strategy's actual rules (see backtester.py) never enter a trade
+        # outside a bullish regime, regardless of confirmations or history.
+        # The tier should reflect that rather than imply a tradeable setup.
+        tier = "D"
+    elif pct >= 80:
+        tier = "A"
+    elif pct >= 60:
+        tier = "B"
+    elif pct >= 40:
+        tier = "C"
+    else:
+        tier = "D"
+
+    return {
+        "tier": tier,
+        "score": round(pct),
+        "breakdown": points,
+        "max_points": max_points,
+    }
+
+
 if __name__ == "__main__":
     import pandas as pd
     from features import compute_features, scale_features

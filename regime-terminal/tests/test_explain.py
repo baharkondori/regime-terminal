@@ -104,6 +104,47 @@ def test_explain_stop_levels_trailing_stop_on_includes_price():
     assert "pulls back" in text.lower()
 
 
+def test_explain_setup_strength_includes_tier_and_score():
+    from explain import explain_setup_strength
+    from regimelabeler import compute_setup_strength
+    result = compute_setup_strength(
+        regime_name="strong_bull", regime_confidence=0.95, conf_count=8,
+        conf_required=7, conf_total=8, historical_continuation_prob=0.85,
+    )
+    text = explain_setup_strength(result, "strong_bull")
+    assert "Tier A" in text
+    assert "96/100" in text
+
+
+def test_explain_setup_strength_never_mentions_profit_target():
+    """Guard against scope creep: this feature explicitly does not include
+    a profit target or price projection, and the explanation text must
+    say so rather than silently omitting it."""
+    from explain import explain_setup_strength
+    from regimelabeler import compute_setup_strength
+    result = compute_setup_strength(
+        regime_name="bull", regime_confidence=0.7, conf_count=6,
+        conf_required=7, conf_total=8, historical_continuation_prob=0.5,
+    )
+    text = explain_setup_strength(result, "bull")
+    lowered = text.lower()
+    assert "profit target" in lowered  # mentions it explicitly...
+    assert "does **not** include a profit target" in text  # ...specifically to say it's excluded
+    assert "price target of $" not in lowered  # never invents a concrete number
+
+
+def test_explain_setup_strength_shows_full_breakdown():
+    from explain import explain_setup_strength
+    from regimelabeler import compute_setup_strength
+    result = compute_setup_strength(
+        regime_name="bull", regime_confidence=0.8, conf_count=6,
+        conf_required=7, conf_total=8, historical_continuation_prob=0.6,
+    )
+    text = explain_setup_strength(result, "bull")
+    assert "Regime confidence" in text
+    assert "Confirmations met" in text
+
+
 def test_explain_transition_with_data_mentions_not_a_prediction():
     from explain import explain_transition
     text = explain_transition("strong_bull", [("bear", 0.89), ("bull", 0.11)], 1885)

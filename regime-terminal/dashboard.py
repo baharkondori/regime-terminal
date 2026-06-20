@@ -237,6 +237,33 @@ c2.metric("Regime confidence", f"{last_confidence:.1%}")
 c3.metric("Confirmations", f"{last_conf_count} / {cfg.n_confirmations_total}")
 c4.metric("Suggested action", action)
 
+# --- Setup strength tier: one transparent summary of the signals above ---
+from regimelabeler import compute_setup_strength
+from explain import explain_setup_strength
+
+_top_next_for_strength = most_likely_next_regimes(pipeline["transition_table"], last_regime, top_n=1)
+# "Historical continuation" = probability that the historically most-likely
+# next regime is itself bullish (i.e. the bullish move tends to continue).
+# None if there's no transition history yet for this regime.
+if _top_next_for_strength:
+    _next_regime_name, _next_regime_prob = _top_next_for_strength[0]
+    _historical_continuation = _next_regime_prob if is_bullish(_next_regime_name) else (1 - _next_regime_prob)
+else:
+    _historical_continuation = None
+
+setup_strength = compute_setup_strength(
+    regime_name=last_regime,
+    regime_confidence=last_confidence,
+    conf_count=last_conf_count,
+    conf_required=cfg.confirmations_required,
+    conf_total=cfg.n_confirmations_total,
+    historical_continuation_prob=_historical_continuation,
+)
+
+tier_colors = {"A": "🟢", "B": "🟡", "C": "🟠", "D": "🔴"}
+st.markdown(f"### {tier_colors.get(setup_strength['tier'], '')} Setup Strength: Tier {setup_strength['tier']} ({setup_strength['score']}/100)")
+st.caption(explain_setup_strength(setup_strength, last_regime))
+
 # --- Plain-English explanation (for beginners) ---
 from explain import explain_signal, explain_confirmation_breakdown, GLOSSARY, DISCLAIMER_SHORT, explain_stop_levels
 

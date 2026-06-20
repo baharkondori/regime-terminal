@@ -26,6 +26,7 @@ from hmmmodel import fit_regime_model
 from regimelabeler import label_regimes, apply_labels, is_bullish
 from strategies import compute_indicators, confirmations_count_series
 from backtester import run_backtest
+from walkforward import run_walkforward
 from utils import set_seed
 
 
@@ -131,11 +132,42 @@ def cmd_live_signal(cfg: Config, force_refresh: bool):
     print(f"\n{DISCLAIMER}\n")
 
 
+def cmd_walkforward(cfg: Config, force_refresh: bool, n_folds: int, train_frac: float):
+    set_seed(cfg.random_state)
+    df = load_ohlcv(cfg, force_refresh=force_refresh)
+
+    result = run_walkforward(df, cfg, n_folds=n_folds, train_frac=train_frac)
+
+    print(f"\n{'=' * 70}")
+    print(f"WALK-FORWARD VALIDATION — {cfg.asset} — {len(result.windows)} folds")
+    print(f"{'=' * 70}\n")
+    print(
+        "Each fold's HMM and regime labels are fit ONLY on that fold's train\n"
+        "window, then scored on the following unseen test window. This is a\n"
+        "more honest estimate of real-world performance than a single\n"
+        "in-sample backtest (see --run-backtest), which fits and evaluates\n"
+        "on the same data and will typically look better than it should.\n"
+    )
+
+    print("Per-fold results:")
+    print(result.per_fold_metrics.to_string(index=False))
+
+    print(f"\n{'=' * 70}")
+    print("AGGREGATED OUT-OF-SAMPLE METRICS")
+    print(f"{'=' * 70}")
+    for k, v in result.aggregated_metrics.items():
+        print(f"  {k:30s}: {v:,.4f}" if isinstance(v, float) else f"  {k:30s}: {v}")
+
+    print(f"\n{DISCLAIMER}\n")
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description="Regime Terminal CLI")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--run-backtest", action="store_true")
     group.add_argument("--live-signal", action="store_true")
+    group.add_argument("--walk-forward", action="store_true", help="Run honest out-of-sample validation instead of a single in-sample backtest")
 
     parser.add_argument("--asset", default="BTC-USD")
     parser.add_argument("--lookback-days", type=int, default=730)
@@ -149,6 +181,8 @@ def main():
     parser.add_argument("--aggressive", action="store_true")
     parser.add_argument("--force-refresh", action="store_true", help="Bypass data cache")
     parser.add_argument("--start", default=None, help="(reserved for future use)")
+    parser.add_argument("--n-folds", type=int, default=5, help="Number of walk-forward folds (only used with --walk-forward)")
+    parser.add_argument("--train-frac", type=float, default=0.7, help="Fraction of each fold used for training, rest is test (only used with --walk-forward)")
 
     args = parser.parse_args()
     cfg = build_config_from_args(args)
@@ -157,6 +191,8 @@ def main():
         cmd_run_backtest(cfg, args.force_refresh)
     elif args.live_signal:
         cmd_live_signal(cfg, args.force_refresh)
+    elif args.walk_forward:
+        cmd_walkforward(cfg, args.force_refresh, args.n_folds, args.train_frac)
 
 
 if __name__ == "__main__":

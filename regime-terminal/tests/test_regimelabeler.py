@@ -103,3 +103,86 @@ def test_most_likely_next_regimes_unknown_regime_returns_empty():
     regimes = np.array(["bull", "chop", "bull"])
     table = compute_transition_table(regimes)
     assert most_likely_next_regimes(table, "nonexistent_regime") == []
+
+
+def test_setup_strength_strong_setup_gets_tier_a():
+    from regimelabeler import compute_setup_strength
+    result = compute_setup_strength(
+        regime_name="strong_bull", regime_confidence=0.95, conf_count=8,
+        conf_required=7, conf_total=8, historical_continuation_prob=0.85,
+    )
+    assert result["tier"] == "A"
+    assert result["score"] >= 80
+
+
+def test_setup_strength_non_bullish_regime_always_tier_d():
+    """The strategy's actual rules never enter trades outside bullish
+    regimes, so the tier must reflect that regardless of how favorable
+    other factors look."""
+    from regimelabeler import compute_setup_strength
+    result = compute_setup_strength(
+        regime_name="bear", regime_confidence=0.99, conf_count=8,
+        conf_required=7, conf_total=8, historical_continuation_prob=0.95,
+    )
+    assert result["tier"] == "D"
+
+    result_chop = compute_setup_strength(
+        regime_name="chop", regime_confidence=0.9, conf_count=8,
+        conf_required=7, conf_total=8, historical_continuation_prob=0.9,
+    )
+    assert result_chop["tier"] == "D"
+
+
+def test_setup_strength_breakdown_sums_correctly():
+    from regimelabeler import compute_setup_strength
+    result = compute_setup_strength(
+        regime_name="bull", regime_confidence=0.8, conf_count=6,
+        conf_required=7, conf_total=8, historical_continuation_prob=0.6,
+    )
+    total_points = sum(result["breakdown"].values())
+    total_max = sum(result["max_points"].values())
+    expected_score = round(100 * total_points / total_max)
+    assert result["score"] == expected_score
+
+
+def test_setup_strength_missing_historical_data_does_not_penalize():
+    """When historical_continuation_prob is None, that factor's max_points
+    should shrink to 0 rather than count against the score as a missing 0/20."""
+    from regimelabeler import compute_setup_strength
+    with_history = compute_setup_strength(
+        regime_name="bull", regime_confidence=0.8, conf_count=7,
+        conf_required=7, conf_total=8, historical_continuation_prob=0.0,
+    )
+    without_history = compute_setup_strength(
+        regime_name="bull", regime_confidence=0.8, conf_count=7,
+        conf_required=7, conf_total=8, historical_continuation_prob=None,
+    )
+    # Missing data should score higher than confirmed-bad data (0.0 probability),
+    # since absence of information isn't treated as a negative signal.
+    assert without_history["score"] > with_history["score"]
+    assert without_history["max_points"]["historical_pattern"] == 0
+
+
+def test_setup_strength_confirmations_capped_at_required_threshold():
+    """Exceeding conf_required shouldn't give more than full credit for
+    that factor -- e.g. 8/8 confirmations when only 5 are required should
+    score the same as exactly 5/5."""
+    from regimelabeler import compute_setup_strength
+    result_exact = compute_setup_strength(
+        regime_name="bull", regime_confidence=0.8, conf_count=5,
+        conf_required=5, conf_total=8, historical_continuation_prob=0.5,
+    )
+    result_over = compute_setup_strength(
+        regime_name="bull", regime_confidence=0.8, conf_count=8,
+        conf_required=5, conf_total=8, historical_continuation_prob=0.5,
+    )
+    assert result_exact["breakdown"]["confirmations"] == result_over["breakdown"]["confirmations"]
+
+
+def test_setup_strength_tier_is_one_of_valid_values():
+    from regimelabeler import compute_setup_strength, SETUP_STRENGTH_TIERS
+    result = compute_setup_strength(
+        regime_name="weak_bull", regime_confidence=0.5, conf_count=3,
+        conf_required=7, conf_total=8, historical_continuation_prob=0.4,
+    )
+    assert result["tier"] in SETUP_STRENGTH_TIERS

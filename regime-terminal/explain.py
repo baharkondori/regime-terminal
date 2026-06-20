@@ -197,6 +197,54 @@ DISCLAIMER_SHORT = (
 )
 
 
+_TIER_DESCRIPTIONS = {
+    "A": "Strong — regime is bullish, confidence is high, most/all confirmations agree, and the historical pattern favors continuation.",
+    "B": "Moderate — bullish, but one or more factors (confidence, confirmations, or history) are only partially supportive.",
+    "C": "Weak — bullish regime, but most supporting factors are weak or missing.",
+    "D": "Not a tradeable setup right now — either the regime isn't bullish, or none of the supporting factors line up.",
+}
+
+
+def explain_setup_strength(strength: dict, regime_name: str) -> str:
+    """Plain-English explanation of the setup-strength tier and its breakdown.
+
+    Deliberately does not mention profit targets or price projections —
+    this tier summarizes existing confirmation/confidence/history numbers,
+    it does not forecast a price level. See README for why that's excluded.
+    """
+    tier = strength["tier"]
+    score = strength["score"]
+    breakdown = strength["breakdown"]
+    max_points = strength["max_points"]
+
+    description = _TIER_DESCRIPTIONS.get(tier, "")
+
+    parts = [f"**Setup strength: Tier {tier}** ({score}/100). {description}"]
+
+    factor_labels = {
+        "direction": "Regime is bullish",
+        "regime_confidence": "Regime confidence",
+        "confirmations": "Confirmations met",
+        "historical_pattern": "Historical continuation odds",
+    }
+    detail_lines = []
+    for key, label in factor_labels.items():
+        if key in breakdown and max_points.get(key, 0) > 0:
+            detail_lines.append(f"{label}: {breakdown[key]}/{max_points[key]} pts")
+    if detail_lines:
+        parts.append("Breakdown — " + "; ".join(detail_lines) + ".")
+
+    parts.append(
+        "This tier only summarizes signals already shown elsewhere on this page "
+        "(regime, confidence, confirmations, historical pattern) into one score. "
+        "It does **not** include a profit target or price projection — there's no "
+        "reliable way to forecast *how much* a move might continue, only whether "
+        "the existing signals currently agree with each other."
+    )
+
+    return " ".join(parts)
+
+
 def explain_transition(current_regime: str, next_regime_probs: List, n_observations: int) -> str:
     """Plain-English framing for the historical transition table. Deliberately
     avoids any language implying forecasting or prediction — this describes

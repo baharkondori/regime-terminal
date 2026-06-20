@@ -233,11 +233,12 @@ Messages API if you want to build this out.
 
 ## Caveats & Limitations
 
-- **Overfitting risk.** This system fits the HMM and backtests on the same
-  historical window by default. Use a walk-forward split (fit on an earlier
-  period, test on a later one, roll forward) before trusting any backtest
-  number. Cross-validate `n_components` and `confirmations_required` rather
-  than hand-picking values that look good on one run.
+- **Overfitting risk.** By default, `--run-backtest` fits the HMM and
+  evaluates the strategy on the same historical window, which will almost
+  always look better than the strategy actually performs going forward. Use
+  `--walk-forward` instead (see below) for an honest out-of-sample estimate.
+  Cross-validate `n_components` and `confirmations_required` rather than
+  hand-picking values that look good on one run.
 - **Backtest ≠ live performance.** The backtester assumes fills at the close
   price with a flat `trade_cost`. Real execution has latency, partial fills,
   and slippage that scales with order size and volatility.
@@ -246,9 +247,43 @@ Messages API if you want to build this out.
 - **Regime labels are descriptive, not predictive.** "Bull" means this state
   historically had the highest mean return *in the fitted window* — it is not
   a guarantee about what happens next.
+- **Walk-forward validation reduces, but doesn't eliminate, the risk above.**
+  It removes the specific bias of testing on data the model implicitly
+  already saw while fitting. It cannot account for the market regime
+  changing in ways genuinely absent from the historical data altogether.
 - **This is not financial advice.** Leveraged trading, especially in crypto,
   carries substantial risk of loss. Consult a licensed financial advisor
   before trading with real capital.
+
+---
+
+## Walk-forward validation
+
+```bash
+python cli.py --walk-forward --asset BTC-USD --n-folds 5 --train-frac 0.7
+```
+
+Splits the historical data into `n_folds` sequential windows. In each fold,
+the HMM and regime labels are fit **only** on the train portion
+(`train_frac` of the fold), then scored on the following, never-seen test
+portion. This is implemented in `walkforward.py` and is meaningfully more
+honest than `--run-backtest`'s single in-sample number — expect the
+out-of-sample results to look worse, sometimes considerably worse, than the
+in-sample backtest. That gap **is the point**: it's roughly the amount by
+which the in-sample number was overstating the strategy's real edge.
+
+```python
+from walkforward import run_walkforward
+from config import Config
+from dataloader import load_ohlcv
+
+cfg = Config(asset="BTC-USD")
+df = load_ohlcv(cfg)
+result = run_walkforward(df, cfg, n_folds=5, train_frac=0.7)
+
+print(result.per_fold_metrics)        # per-fold breakdown
+print(result.aggregated_metrics)      # compounded out-of-sample summary
+```
 
 ---
 
@@ -260,24 +295,27 @@ regime-terminal/
 ├── dataloader.py           # yfinance fetch + disk caching
 ├── features.py              # Feature engineering (returns, range, vol change)
 ├── hmmmodel.py               # RegimeHMM: hmmlearn / sklearn GMM fallback
-├── regimelabeler.py           # Auto-label HMM states + transition table
-├── strategies.py                # 8 confirmation indicators (vectorized)
-├── backtester.py                 # Sequential bar-by-bar simulation engine
-├── explain.py                     # Plain-English explanations for beginners
-├── prediction_log.py                # Signal snapshot logging + hindsight grading
-├── utils.py                          # Metrics + Plotly chart helpers
-├── dashboard.py                       # Streamlit app
-├── cli.py                              # Command-line interface
-├── build_notebook.py                    # Script that generates the Colab notebook
+├── nn_regime_model.py         # RegimeNN: PyTorch autoencoder + GMM alternative (optional)
+├── regimelabeler.py            # Auto-label HMM states + transition table + setup strength
+├── strategies.py                 # 8 confirmation indicators (vectorized)
+├── backtester.py                  # Sequential bar-by-bar simulation engine
+├── walkforward.py                   # Honest out-of-sample validation (train/test folds)
+├── explain.py                         # Plain-English explanations for beginners
+├── prediction_log.py                    # Signal snapshot logging + hindsight grading
+├── utils.py                               # Metrics + Plotly chart helpers
+├── dashboard.py                             # Streamlit app
+├── cli.py                                    # Command-line interface
+├── build_notebook.py                           # Script that generates the Colab notebook
 ├── notebooks/
-│   └── regime_terminal_colab.ipynb       # Annotated Colab demo
+│   └── regime_terminal_colab.ipynb               # Annotated Colab demo
 ├── tests/
-│   ├── conftest.py                         # Shared fixtures (synthetic OHLCV)
+│   ├── conftest.py                                 # Shared fixtures (synthetic OHLCV)
 │   ├── test_features.py
 │   ├── test_hmmmodel.py
 │   ├── test_regimelabeler.py
 │   ├── test_strategies.py
 │   ├── test_backtester.py
+│   ├── test_walkforward.py
 │   ├── test_explain.py
 │   └── test_prediction_log.py
 ├── requirements.txt
