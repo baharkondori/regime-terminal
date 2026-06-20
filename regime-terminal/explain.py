@@ -147,6 +147,49 @@ def explain_confirmation_breakdown(breakdown: Dict[str, bool]) -> List[str]:
     return lines
 
 
+def explain_stop_levels(
+    last_price: float,
+    stop_loss_price: float,
+    stop_loss_pct: float,
+    trailing_stop_price,
+    trailing_stop_pct: float,
+    use_trailing_stop: bool,
+) -> str:
+    """Explain, in concrete price terms, what the stop-loss and trailing-stop
+    levels mean for a position opened at the current price — and the
+    important caveat that these levels are not automatic in most apps unless
+    you set them yourself."""
+    lines = [
+        f"If you bought at **${last_price:,.2f}** right now, the backtester's rules "
+        f"would automatically sell if price fell to **${stop_loss_price:,.2f}** "
+        f"(a {stop_loss_pct:.0%} loss) \u2014 that's the stop-loss."
+    ]
+
+    if use_trailing_stop and trailing_stop_price is not None:
+        lines.append(
+            f"There's also a trailing stop: if price rises after you buy and then "
+            f"pulls back {trailing_stop_pct:.0%} from its highest point since your "
+            f"purchase, the rules would sell there too \u2014 locking in whatever gain "
+            f"had built up, rather than giving it all back. (Marked with * above "
+            f"because this level moves upward as price rises \u2014 it isn't fixed like "
+            f"the stop-loss.)"
+        )
+    else:
+        lines.append("Trailing stop is currently turned off, so only the stop-loss above applies.")
+
+    lines.append(
+        "**Important:** these levels only execute automatically *inside this "
+        "backtester's simulation*. On a real or demo trading app, a stop-loss "
+        "usually only protects you if you manually set one as an order on the "
+        "exchange itself \u2014 otherwise, if you step away (e.g. in a meeting) and "
+        "price moves against you, nothing sells on your behalf. If your app "
+        "supports stop-loss or stop-limit orders, setting one at the price shown "
+        "above is how you'd replicate this protection in real life."
+    )
+
+    return " ".join(lines)
+
+
 DISCLAIMER_SHORT = (
     "This is what the strategy's rules would automatically do, based only on "
     "past patterns. It is **not personal financial advice**, and is not a "

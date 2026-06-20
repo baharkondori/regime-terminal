@@ -60,6 +60,50 @@ def test_disclaimer_short_is_nonempty_and_mentions_not_advice():
     assert "not" in DISCLAIMER_SHORT.lower()
 
 
+def test_explain_stop_levels_includes_concrete_prices():
+    from explain import explain_stop_levels
+    text = explain_stop_levels(
+        last_price=60000.0, stop_loss_price=55200.0, stop_loss_pct=0.08,
+        trailing_stop_price=None, trailing_stop_pct=0.04, use_trailing_stop=False,
+    )
+    assert "60,000.00" in text
+    assert "55,200.00" in text
+    assert "8%" in text
+
+
+def test_explain_stop_levels_mentions_manual_setup_caveat():
+    """The most important line: this must always warn that automatic
+    execution only happens in the simulation, not in a real/demo app,
+    since that's the exact gap the user was confused about."""
+    from explain import explain_stop_levels
+    text = explain_stop_levels(
+        last_price=100.0, stop_loss_price=92.0, stop_loss_pct=0.08,
+        trailing_stop_price=None, trailing_stop_pct=0.04, use_trailing_stop=False,
+    )
+    lowered = text.lower()
+    assert "manually set" in lowered or "set one as an order" in lowered
+    assert "nothing sells on your behalf" in lowered
+
+
+def test_explain_stop_levels_trailing_stop_off_says_so():
+    from explain import explain_stop_levels
+    text = explain_stop_levels(
+        last_price=100.0, stop_loss_price=92.0, stop_loss_pct=0.08,
+        trailing_stop_price=None, trailing_stop_pct=0.04, use_trailing_stop=False,
+    )
+    assert "turned off" in text.lower()
+
+
+def test_explain_stop_levels_trailing_stop_on_includes_price():
+    from explain import explain_stop_levels
+    text = explain_stop_levels(
+        last_price=100.0, stop_loss_price=92.0, stop_loss_pct=0.08,
+        trailing_stop_price=96.0, trailing_stop_pct=0.04, use_trailing_stop=True,
+    )
+    assert "trailing stop" in text.lower()
+    assert "pulls back" in text.lower()
+
+
 def test_explain_transition_with_data_mentions_not_a_prediction():
     from explain import explain_transition
     text = explain_transition("strong_bull", [("bear", 0.89), ("bull", 0.11)], 1885)

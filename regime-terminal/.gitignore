@@ -10,3 +10,4 @@ models/
 .streamlit/
 *.egg-info/
 .DS_Store
+signal_log.csv

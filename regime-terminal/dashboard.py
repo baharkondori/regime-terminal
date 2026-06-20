@@ -29,11 +29,15 @@ from dataloader import load_ohlcv
 from features import compute_features, scale_features
 from hmmmodel import fit_regime_model
 from regimelabeler import label_regimes, apply_labels, is_bullish, compute_transition_table, most_likely_next_regimes
+from prediction_log import log_snapshot, grade_log, summarize_accuracy, load_log
 from strategies import compute_indicators, evaluate_confirmations, confirmations_count_series
 from backtester import run_backtest
 from utils import regime_price_chart, equity_curve_chart, drawdown_chart, posterior_heatmap, set_seed
 
 st.set_page_config(page_title="Regime Terminal", layout="wide", page_icon="📈")
+
+SIGNAL_LOG_PATH = "signal_log.csv"
+DEFAULT_GRADING_HORIZON_BARS = 24  # how many bars ahead to check "did the historical pattern's top guess come true"
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +188,34 @@ if "pipeline" not in st.session_state or run_button:
 
 pipeline = st.session_state.pipeline
 
+# --- Auto-log this snapshot, and grade any past snapshots whose outcome is now knowable ---
+_last_regime_for_log = pipeline["regime_names"][-1]
+_last_price_for_log = float(pipeline["df"]["Close"].iloc[-1])
+_last_bar_ts_for_log = pipeline["df"].index[-1]
+_top_next = most_likely_next_regimes(pipeline["transition_table"], _last_regime_for_log, top_n=1)
+_predicted_regime, _predicted_prob = (_top_next[0] if _top_next else (None, None))
+
+_last_conf_count_for_log = int(pipeline["conf_counts"][-1])
+_action_for_log = "LONG/HOLD" if (is_bullish(_last_regime_for_log) and _last_conf_count_for_log >= cfg.confirmations_required) else (
+    "EXIT/FLAT" if not is_bullish(_last_regime_for_log) else "WATCH"
+)
+
+log_snapshot(
+    path=SIGNAL_LOG_PATH,
+    asset=cfg.asset,
+    bar_timestamp=_last_bar_ts_for_log,
+    regime=_last_regime_for_log,
+    confidence=float(np.max(pipeline["proba"][-1])),
+    conf_count=_last_conf_count_for_log,
+    conf_required=cfg.confirmations_required,
+    action=_action_for_log,
+    price_at_log=_last_price_for_log,
+    predicted_next_regime=_predicted_regime,
+    predicted_next_prob=_predicted_prob,
+    horizon_bars=DEFAULT_GRADING_HORIZON_BARS,
+)
+graded_log = grade_log(SIGNAL_LOG_PATH, pipeline["df"], pipeline["regime_names"])
+
 
 # ---------------------------------------------------------------------------
 # Current signal panel
@@ -206,7 +238,7 @@ c3.metric("Confirmations", f"{last_conf_count} / {cfg.n_confirmations_total}")
 c4.metric("Suggested action", action)
 
 # --- Plain-English explanation (for beginners) ---
-from explain import explain_signal, explain_confirmation_breakdown, GLOSSARY, DISCLAIMER_SHORT
+from explain import explain_signal, explain_confirmation_breakdown, GLOSSARY, DISCLAIMER_SHORT, explain_stop_levels
 
 st.info(
     explain_signal(
@@ -220,6 +252,31 @@ st.info(
     )
 )
 st.caption(DISCLAIMER_SHORT)
+
+# --- Stop-loss / trailing-stop levels for THIS moment, in real price terms ---
+last_price = float(pipeline["df"]["Close"].iloc[-1])
+stop_loss_price = last_price * (1 - cfg.stop_loss_pct)
+trailing_stop_price = last_price * (1 - cfg.trailing_stop_pct) if cfg.use_trailing_stop else None
+
+st.markdown("### 🛟 If you bought right now, at what price would you automatically be out?")
+sl1, sl2, sl3 = st.columns(3)
+sl1.metric("Current price", f"${last_price:,.2f}")
+sl2.metric(f"Stop-loss ({cfg.stop_loss_pct:.0%} below)", f"${stop_loss_price:,.2f}")
+if trailing_stop_price is not None:
+    sl3.metric(f"Trailing stop ({cfg.trailing_stop_pct:.0%} below peak)", f"${trailing_stop_price:,.2f} *")
+else:
+    sl3.metric("Trailing stop", "Off")
+
+st.caption(
+    explain_stop_levels(
+        last_price=last_price,
+        stop_loss_price=stop_loss_price,
+        stop_loss_pct=cfg.stop_loss_pct,
+        trailing_stop_price=trailing_stop_price,
+        trailing_stop_pct=cfg.trailing_stop_pct,
+        use_trailing_stop=cfg.use_trailing_stop,
+    )
+)
 
 with st.expander("Why this signal? (confirmation breakdown)"):
     for line in explain_confirmation_breakdown(pipeline["conf_breakdown"]):
@@ -253,6 +310,41 @@ if not transition_table.empty and last_regime in transition_table.index:
         st.dataframe(display_table, use_container_width=True)
 else:
     st.caption("Not enough historical data yet to show transition patterns for this regime.")
+
+# --- Track record: was the historical pattern's top guess actually right, looking back? ---
+st.markdown("### 📓 Track record: was the historical pattern right last time?")
+st.caption(
+    f"Every time you click Run/Retrain, this app saves a snapshot of the signal and its "
+    f"top historical guess. Once {DEFAULT_GRADING_HORIZON_BARS} bars have passed, it checks "
+    f"whether that guess actually came true and marks it correct or incorrect below — so you "
+    f"can see, over time, how reliable these historical patterns have actually been for "
+    f"{cfg.asset}, instead of just trusting the most recent one."
+)
+
+accuracy = summarize_accuracy(graded_log)
+if accuracy["n_graded"] == 0:
+    st.info(
+        "No graded predictions yet — this builds up over time as you keep using the "
+        f"dashboard. Each snapshot needs {DEFAULT_GRADING_HORIZON_BARS} bars to pass before "
+        "it can be graded."
+    )
+else:
+    t1, t2, t3 = st.columns(3)
+    t1.metric("Predictions graded so far", accuracy["n_graded"])
+    t2.metric("Correct", f"{accuracy['n_correct']} / {accuracy['n_graded']}")
+    t3.metric("Accuracy", f"{accuracy['accuracy_pct']:.0f}%")
+    st.caption(
+        f"{accuracy['n_pending']} more snapshot(s) logged but not yet old enough to grade."
+    )
+
+with st.expander("View full signal log (all snapshots, graded and pending)"):
+    if graded_log.empty:
+        st.caption("No snapshots logged yet.")
+    else:
+        display_log = graded_log.sort_values("logged_at", ascending=False).copy()
+        st.dataframe(display_log, use_container_width=True)
+        csv = display_log.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Export signal log to CSV", csv, "signal_log_export.csv", "text/csv")
 
 st.markdown("---")
 

@@ -172,6 +172,31 @@ Running a backtest (via CLI, notebook, or dashboard) gives you:
 - **Metrics** — total return, alpha vs. buy-and-hold, Sharpe, Sortino, max drawdown, win rate
 - **Per-state performance** — how trades entered in each regime actually performed
 
+The dashboard additionally includes a few features aimed at people new to
+trading terminology, all in `explain.py`, `regimelabeler.py`, and
+`prediction_log.py`:
+
+- **Plain-English signal explanation** — translates the regime/confidence/
+  confirmation numbers into a sentence describing what's happening and why
+  (`explain_signal`).
+- **Historical transition panel** — "looking back at every time the market
+  was in regime X, what did the *next* period turn out to be, historically."
+  This is explicitly framed as a historical pattern, not a forecast — the
+  language in `explain_transition` is deliberately hedged and tested to
+  avoid implying certainty (see `tests/test_explain.py`).
+- **Stop-loss / trailing-stop price levels** — shows the actual dollar price
+  at which the backtester's rules would exit if you bought right now. Comes
+  with an explicit caveat that this only executes automatically *inside the
+  simulation* — on a real or demo exchange, you need to place an actual
+  stop-loss/stop-limit order yourself for this protection to apply.
+- **Signal log + hindsight grading** (`prediction_log.py`) — every dashboard
+  run automatically saves a snapshot (regime, confidence, confirmations,
+  price, and the top historical "most likely next regime" guess) to
+  `signal_log.csv`. Once enough bars have passed for the outcome to be
+  knowable, the dashboard checks whether that guess was actually right and
+  shows a running accuracy score. This file is gitignored by default since
+  it's personal usage history, not project code.
+
 ---
 
 ## Retraining
@@ -235,23 +260,28 @@ regime-terminal/
 ├── dataloader.py           # yfinance fetch + disk caching
 ├── features.py              # Feature engineering (returns, range, vol change)
 ├── hmmmodel.py               # RegimeHMM: hmmlearn / sklearn GMM fallback
-├── regimelabeler.py           # Auto-label HMM states as bull/bear/chop/etc.
-├── strategies.py                # 8 confirmation indicators
+├── regimelabeler.py           # Auto-label HMM states + transition table
+├── strategies.py                # 8 confirmation indicators (vectorized)
 ├── backtester.py                 # Sequential bar-by-bar simulation engine
-├── utils.py                       # Metrics + Plotly chart helpers
-├── dashboard.py                    # Streamlit app
-├── cli.py                           # Command-line interface
-├── build_notebook.py                 # Script that generates the Colab notebook
+├── explain.py                     # Plain-English explanations for beginners
+├── prediction_log.py                # Signal snapshot logging + hindsight grading
+├── utils.py                          # Metrics + Plotly chart helpers
+├── dashboard.py                       # Streamlit app
+├── cli.py                              # Command-line interface
+├── build_notebook.py                    # Script that generates the Colab notebook
 ├── notebooks/
-│   └── regime_terminal_colab.ipynb    # Annotated Colab demo
+│   └── regime_terminal_colab.ipynb       # Annotated Colab demo
 ├── tests/
-│   ├── conftest.py                      # Shared fixtures (synthetic OHLCV)
+│   ├── conftest.py                         # Shared fixtures (synthetic OHLCV)
 │   ├── test_features.py
 │   ├── test_hmmmodel.py
 │   ├── test_regimelabeler.py
 │   ├── test_strategies.py
-│   └── test_backtester.py
+│   ├── test_backtester.py
+│   ├── test_explain.py
+│   └── test_prediction_log.py
 ├── requirements.txt
 ├── pytest.ini
+├── .gitignore
 └── README.md
 ```
