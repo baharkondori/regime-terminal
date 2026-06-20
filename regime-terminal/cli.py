@@ -24,7 +24,7 @@ from dataloader import load_ohlcv
 from features import compute_features, scale_features
 from hmmmodel import fit_regime_model
 from regimelabeler import label_regimes, apply_labels, is_bullish
-from strategies import compute_indicators, evaluate_confirmations, confirmations_count
+from strategies import compute_indicators, confirmations_count_series
 from backtester import run_backtest
 from utils import set_seed
 
@@ -69,10 +69,7 @@ def run_pipeline(cfg: Config, force_refresh: bool = False):
     proba_aligned = pd.DataFrame(proba, index=feats.index).loc[common_idx].values
     indicators_aligned = indicators.loc[common_idx]
 
-    conf_counts = np.array([
-        confirmations_count(evaluate_confirmations(row, "bull", cfg))
-        for _, row in indicators_aligned.iterrows()
-    ])
+    conf_counts = confirmations_count_series(indicators_aligned, "bull", cfg)
 
     return {
         "df": aligned_df,

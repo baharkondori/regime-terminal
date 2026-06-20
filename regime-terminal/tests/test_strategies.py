@@ -79,3 +79,34 @@ def test_direction_agnostic_confirmations_identical_across_directions(synthetic_
     bear_conf = evaluate_confirmations(row, "bear", small_config)
     for key in ["adx", "volatility", "volume_spike"]:
         assert bull_conf[key] == bear_conf[key]
+
+
+def test_confirmations_count_series_matches_row_by_row(synthetic_ohlcv, small_config):
+    """The vectorized confirmations_count_series() must produce exactly the same
+    counts as calling evaluate_confirmations()+confirmations_count() per row —
+    it's a performance optimization, not a behavior change."""
+    from strategies import confirmations_count_series
+
+    indicators = compute_indicators(synthetic_ohlcv, small_config).dropna()
+
+    expected = np.array([
+        confirmations_count(evaluate_confirmations(row, "bull", small_config))
+        for _, row in indicators.iterrows()
+    ])
+    actual = confirmations_count_series(indicators, "bull", small_config)
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_confirmations_count_series_bear_direction_matches_row_by_row(synthetic_ohlcv, small_config):
+    from strategies import confirmations_count_series
+
+    indicators = compute_indicators(synthetic_ohlcv, small_config).dropna()
+
+    expected = np.array([
+        confirmations_count(evaluate_confirmations(row, "bear", small_config))
+        for _, row in indicators.iterrows()
+    ])
+    actual = confirmations_count_series(indicators, "bear", small_config)
+
+    np.testing.assert_array_equal(actual, expected)

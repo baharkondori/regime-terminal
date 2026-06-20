@@ -29,7 +29,7 @@ from dataloader import load_ohlcv
 from features import compute_features, scale_features
 from hmmmodel import fit_regime_model
 from regimelabeler import label_regimes, apply_labels, is_bullish
-from strategies import compute_indicators, evaluate_confirmations, confirmations_count
+from strategies import compute_indicators, evaluate_confirmations, confirmations_count_series
 from backtester import run_backtest
 from utils import regime_price_chart, equity_curve_chart, drawdown_chart, posterior_heatmap, set_seed
 
@@ -148,13 +148,11 @@ def run_pipeline(cfg: Config):
     proba_aligned = pd.DataFrame(proba, index=feats.index).loc[common_idx].values
     indicators_aligned = indicators.loc[common_idx]
 
-    conf_counts = []
-    conf_breakdown = []
-    for _, row in indicators_aligned.iterrows():
-        c = evaluate_confirmations(row, "bull", cfg)
-        conf_counts.append(confirmations_count(c))
-        conf_breakdown.append(c)
-    conf_counts = np.array(conf_counts)
+    conf_counts = confirmations_count_series(indicators_aligned, "bull", cfg)
+    # Breakdown dict (which specific checks passed) is only needed for the
+    # single most recent bar, shown in the "why this signal" panel — so this
+    # one row still uses the readable per-check function, not the full series.
+    conf_breakdown = evaluate_confirmations(indicators_aligned.iloc[-1], "bull", cfg) if len(indicators_aligned) else {}
 
     result = run_backtest(aligned_df, regime_names_aligned, conf_counts, cfg)
 
@@ -165,7 +163,7 @@ def run_pipeline(cfg: Config):
         "state_summary": summary,
         "mapping": mapping,
         "conf_counts": conf_counts,
-        "conf_breakdown": conf_breakdown[-1] if conf_breakdown else {},
+        "conf_breakdown": conf_breakdown,
         "result": result,
         "model": model,
         "indicators": indicators_aligned,

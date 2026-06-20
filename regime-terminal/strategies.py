@@ -159,6 +159,45 @@ def confirmations_count(confirmations: Dict[str, bool]) -> int:
     return sum(1 for v in confirmations.values() if v)
 
 
+def confirmations_count_series(indicators: pd.DataFrame, direction: Direction, cfg: Config) -> np.ndarray:
+    """Vectorized equivalent of calling evaluate_confirmations() + confirmations_count()
+    on every row of `indicators` via a Python loop. Same logic, same results, but
+    operates on whole columns at once instead of iterating row-by-row — this is the
+    main performance bottleneck in the original CLI/dashboard pipeline (a 17k-row
+    .iterrows() loop), so use this for any full-dataset confirmation count.
+
+    Returns an np.ndarray of ints, same length/order as `indicators`.
+    """
+    ma = indicators["ma"]
+    has_ma = ma.notna()
+
+    if direction == "bull":
+        rsi_ok = indicators["rsi"] < cfg.rsi_bull_max
+        momentum_ok = indicators["roc"] > 0
+        macd_ok = indicators["macd_line"] > indicators["macd_signal"]
+        price_action_ok = indicators["breakout_up"].astype(bool)
+        ma_ok = has_ma & (indicators["close"] > ma)
+    else:  # bear
+        rsi_ok = indicators["rsi"] > cfg.rsi_bear_min
+        momentum_ok = indicators["roc"] < 0
+        macd_ok = indicators["macd_line"] < indicators["macd_signal"]
+        price_action_ok = indicators["breakout_down"].astype(bool)
+        ma_ok = has_ma & (indicators["close"] < ma)
+
+    adx_ok = indicators["adx"] > cfg.adx_threshold
+    vol_pct = indicators["realized_vol_pct"]
+    volatility_ok = vol_pct.notna() & (vol_pct < 0.85)
+    vz = indicators["volume_z"]
+    volume_spike_ok = vz.notna() & (vz > cfg.vol_spike_std)
+
+    total = (
+        rsi_ok.astype(int) + momentum_ok.astype(int) + macd_ok.astype(int)
+        + price_action_ok.astype(int) + ma_ok.astype(int) + adx_ok.astype(int)
+        + volatility_ok.astype(int) + volume_spike_ok.astype(int)
+    )
+    return total.values
+
+
 if __name__ == "__main__":
     import pandas as pd
 
