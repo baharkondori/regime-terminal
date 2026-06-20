@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.cache/
+.venv/
+venv/
+*.joblib
+.pytest_cache/
+.ipynb_checkpoints/
+models/
+.streamlit/
+*.egg-info/
+.DS_Store
