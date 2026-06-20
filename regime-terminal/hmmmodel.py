@@ -81,6 +81,8 @@ class RegimeHMM:
                 n_components=self.n_components,
                 covariance_type=self.cfg.hmm_covariance_type,
                 n_iter=self.cfg.hmm_n_iter,
+                tol=self.cfg.hmm_tol,
+                verbose=self.cfg.hmm_verbose,
                 random_state=self.cfg.random_state,
             )
             model.fit(X)

@@ -27,7 +27,9 @@ class Config:
     n_components: int = 7
     hmm_backend: str = "hmmlearn"  # "hmmlearn" or "gmm" (sklearn fallback)
     hmm_covariance_type: str = "full"
-    hmm_n_iter: int = 200
+    hmm_n_iter: int = 1000
+    hmm_tol: float = 0.05
+    hmm_verbose: bool = False
     random_state: int = 42
     rolling_vol_window: int = 24  # hours, for extra robustness feature
 
